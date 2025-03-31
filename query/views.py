@@ -1,6 +1,4 @@
 from django.shortcuts import render
-
-# Create your views here.
 import openai
 from django.conf import settings
 from rest_framework.views import APIView
@@ -8,7 +6,8 @@ from rest_framework.response import Response
 from rest_framework import status
 from .models import SalesData
 
-openai.api_key = settings.OPENAI_API_KEY
+# Initialize OpenAI client
+openai_client = openai.OpenAI(api_key=settings.OPENAI_API_KEY)
 
 class QueryAPIView(APIView):
     def post(self, request):
@@ -18,14 +17,14 @@ class QueryAPIView(APIView):
 
         # Convert natural language to SQL using OpenAI
         try:
-            response = openai.ChatCompletion.create(
-                model="gpt-4",
+            response = openai_client.chat.completions.create(
+                model="gpt-3.5-turbo",
                 messages=[
                     {"role": "system", "content": "Convert natural language queries into SQL queries for an SQLite database."},
                     {"role": "user", "content": user_query}
                 ]
             )
-            sql_query = response["choices"][0]["message"]["content"]
+            sql_query = response.choices[0].message.content  # Corrected response parsing
         except Exception as e:
             return Response({"error": f"AI processing error: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -44,14 +43,14 @@ class ExplainAPIView(APIView):
             return Response({"error": "Query is required"}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            response = openai.ChatCompletion.create(
-                model="gpt-4",
+            response = openai_client.chat.completions.create(
+                model="gpt-3.5-turbo",
                 messages=[
                     {"role": "system", "content": "Explain how this natural language query is converted into SQL."},
                     {"role": "user", "content": user_query}
                 ]
             )
-            explanation = response["choices"][0]["message"]["content"]
+            explanation = response.choices[0].message.content  # Corrected response parsing
             return Response({"query": user_query, "explanation": explanation})
         except Exception as e:
             return Response({"error": f"AI processing error: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -63,14 +62,14 @@ class ValidateAPIView(APIView):
             return Response({"error": "Query is required"}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            response = openai.ChatCompletion.create(
-                model="gpt-4",
+            response = openai_client.chat.completions.create(
+                model="gpt-3.5-turbo",
                 messages=[
                     {"role": "system", "content": "Convert natural language queries into SQL queries for an SQLite database."},
                     {"role": "user", "content": user_query}
                 ]
             )
-            sql_query = response["choices"][0]["message"]["content"]
+            sql_query = response.choices[0].message.content  # Corrected response parsing
             
             # Check if query is valid
             try:
