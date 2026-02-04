@@ -1,81 +1,91 @@
-from django.shortcuts import render
-import openai
-from django.conf import settings
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from .models import SalesData
-
-# Initialize OpenAI client
-openai_client = openai.OpenAI(api_key=settings.OPENAI_API_KEY)
+from .ai_utils import generate_sql
+from django.db import connection
 
 class QueryAPIView(APIView):
     def post(self, request):
         user_query = request.data.get("query", "")
         if not user_query:
-            return Response({"error": "Query is required"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": "Query is required"}, status=400)
 
-        # Convert natural language to SQL using OpenAI
         try:
-            response = openai_client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "Convert natural language queries into SQL queries for an SQLite database."},
-                    {"role": "user", "content": user_query}
-                ]
-            )
-            sql_query = response.choices[0].message.content  # Corrected response parsing
+            sql_query = generate_sql(user_query)
         except Exception as e:
-            return Response({"error": f"AI processing error: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({"error": f"AI error: {str(e)}"}, status=500)
 
-        # Execute query
         try:
-            result = SalesData.objects.raw(sql_query)
-            data = [{"month": row.month, "revenue": row.revenue} for row in result]
-            return Response({"query": sql_query, "result": data})
+            with connection.cursor() as cursor:
+                cursor.execute(sql_query)
+                columns = [col[0] for col in cursor.description]
+                rows = cursor.fetchall()
+
+            data = [dict(zip(columns, row)) for row in rows]
+
+            return Response({
+                "query": sql_query,
+                "result": data
+            })
+
         except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": str(e)}, status=400)
+
+
+import ollama
 
 class ExplainAPIView(APIView):
     def post(self, request):
         user_query = request.data.get("query", "")
         if not user_query:
-            return Response({"error": "Query is required"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"error": "Query is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         try:
-            response = openai_client.chat.completions.create(
-                model="gpt-3.5-turbo",
+            prompt = (
+                "Explain how the following natural language query would be "
+                "converted into an SQLite SQL query. Do not write SQL.\n\n"
+                f"{user_query}"
+            )
+
+            response = ollama.chat(
+                model="phi3:mini",
                 messages=[
-                    {"role": "system", "content": "Explain how this natural language query is converted into SQL."},
-                    {"role": "user", "content": user_query}
+                    {"role": "user", "content": prompt}
                 ]
             )
-            explanation = response.choices[0].message.content  # Corrected response parsing
-            return Response({"query": user_query, "explanation": explanation})
+
+            explanation = response["message"]["content"].strip()
+
+            return Response({
+                "query": user_query,
+                "explanation": explanation
+            })
+
         except Exception as e:
-            return Response({"error": f"AI processing error: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response(
+                {"error": f"AI error: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
 
 class ValidateAPIView(APIView):
     def post(self, request):
         user_query = request.data.get("query", "")
         if not user_query:
-            return Response({"error": "Query is required"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": "Query is required"}, status=400)
 
         try:
-            response = openai_client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "Convert natural language queries into SQL queries for an SQLite database."},
-                    {"role": "user", "content": user_query}
-                ]
-            )
-            sql_query = response.choices[0].message.content  # Corrected response parsing
-            
-            # Check if query is valid
-            try:
-                SalesData.objects.raw(f"EXPLAIN {sql_query}")
-                return Response({"query": user_query, "status": "Valid"})
-            except Exception:
-                return Response({"query": user_query, "status": "Invalid"})
+            sql_query = generate_sql(user_query)
         except Exception as e:
-            return Response({"error": f"AI processing error: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({"error": f"AI error: {str(e)}"}, status=500)
+
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(f"EXPLAIN {sql_query}")
+            return Response({"query": user_query, "status": "Valid"})
+        except Exception:
+            return Response({"query": user_query, "status": "Invalid"})
